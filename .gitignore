@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Capacitor generated native projects (regenerated in CI by `npx cap add ios`)
+/ios/
+/android/
+
+# Build output
+*.ipa
+*.xcarchive
+DerivedData/
+
+# macOS / editor cruft
+.DS_Store

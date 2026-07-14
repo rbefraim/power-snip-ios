@@ -1,0 +1,21 @@
+{
+  "appId": "me.yourplace.powersnip",
+  "appName": "Power Snip!",
+  "webDir": "www",
+  "backgroundColor": "#0d3540",
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0d3540"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "launchAutoHide": true,
+      "backgroundColor": "#0d3540",
+      "showSpinner": false
+    }
+  }
+}
