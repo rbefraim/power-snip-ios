@@ -1,0 +1,99 @@
+name: iOS → TestFlight
+
+# Builds Power Snip! on a GitHub-hosted macOS runner and uploads to TestFlight.
+# No Mac required — GitHub provides the macOS machine.
+on:
+  workflow_dispatch:        # click "Run workflow" in the Actions tab
+  push:
+    tags: ['v*']            # or push a tag like v1.0.0
+
+jobs:
+  build:
+    runs-on: macos-14       # GitHub-hosted macOS runner (free minutes on public repos)
+    timeout-minutes: 45
+
+    env:
+      APP_ID: me.yourplace.powersnip
+      SCHEME: App
+      ASC_KEY_ID:    ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install JS deps + generate the iOS project
+        run: |
+          npm install
+          npx cap add ios || true
+          npx cap sync ios
+
+      - name: Force landscape-only orientation
+        run: |
+          PLIST=ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationLandscapeRight" "$PLIST"
+
+      # The App Store Connect API key (.p8). Stored as a base64 secret so it never
+      # appears in the repo. This is what replaces "having a Mac with your certs on it".
+      - name: Install App Store Connect API key
+        run: |
+          mkdir -p ~/private_keys
+          echo -n "${{ secrets.ASC_KEY_P8_BASE64 }}" | base64 --decode > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      # Automatic signing: Xcode fetches/creates the distribution cert + provisioning
+      # profile from App Store Connect using the API key. No manual certificate export.
+      - name: Archive
+        run: |
+          xcodebuild -workspace ios/App/App.xcworkspace \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            PRODUCT_BUNDLE_IDENTIFIER="$APP_ID" \
+            archive
+
+      - name: Export .ipa
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>uploadSymbols</key><true/>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Upload to TestFlight
+        run: |
+          xcrun altool --upload-app -f "$RUNNER_TEMP/export/App.ipa" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Save the build for download
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: power-snip-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: ignore
