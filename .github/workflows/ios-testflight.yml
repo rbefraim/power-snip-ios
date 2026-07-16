@@ -10,7 +10,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    # Apple requires the iOS 26 SDK (Xcode 26+) for App Store uploads, so we need a
+    # runner image that ships Xcode 26 (macos-15 / macos-26). macos-14 is Xcode 15.
+    runs-on: macos-15
     timeout-minutes: 45
 
     env:
@@ -23,6 +25,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode 26 (iOS 26 SDK, required by App Store)
+        run: |
+          echo "----- Xcodes available on this runner -----"
+          ls -d /Applications/Xcode*.app 2>/dev/null || true
+          # Prefer Xcode 26.x; otherwise fall back to the newest installed Xcode.
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XC" ]; then XC=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1); fi
+          echo "Selecting: $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          echo "iOS SDKs:"; xcodebuild -showsdks | grep -i ios || true
 
       - uses: actions/setup-node@v4
         with:
