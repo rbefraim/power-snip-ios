@@ -42,16 +42,6 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationLandscapeRight" "$PLIST"
 
-      - name: Disable code signing on CocoaPods targets, re-pod
-        run: |
-          PODFILE=ios/App/Podfile
-          # Inject CODE_SIGNING_ALLOWED=NO for every Pods target so only the App
-          # target consumes the distribution profile (manual signing otherwise
-          # tries to sign each pod framework and fails for lack of a profile).
-          perl -0pi -e 's/(post_install do \|installer\|\n)/$1  installer.pods_project.targets.each do |t|\n    t.build_configurations.each { |c| c.build_settings["CODE_SIGNING_ALLOWED"] = "NO" }\n  end\n/' "$PODFILE"
-          echo "----- patched Podfile post_install -----"; grep -n "CODE_SIGNING_ALLOWED" "$PODFILE" || true
-          (cd ios/App && pod install)
-
       - name: Install App Store Connect API key (for altool upload)
         run: |
           mkdir -p ~/private_keys
