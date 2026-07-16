@@ -2,7 +2,7 @@
   "name": "power-snip-app",
   "version": "1.0.0",
   "private": true,
-  "description": "Power Snip! \u2014 Capacitor native shell (iOS + Android)",
+  "description": "Power Snip! — Capacitor native shell (iOS + Android)",
   "scripts": {
     "ios:add": "npx cap add ios && npx cap sync ios",
     "android:add": "npx cap add android && npx cap sync android",
@@ -14,8 +14,7 @@
     "@capacitor/core": "^6.1.2",
     "@capacitor/ios": "^6.1.2",
     "@capacitor/android": "^6.1.2",
-    "@capacitor/splash-screen": "^6.0.2",
-    "@capacitor-community/admob": "^6.0.0"
+    "@capacitor/splash-screen": "^6.0.2"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.1.2",
