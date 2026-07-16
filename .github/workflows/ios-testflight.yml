@@ -32,6 +32,12 @@ jobs:
         run: |
           npm install
           npx cap add ios || true
+          # Link the CocoaPods statically so there are NO embedded dynamic frameworks
+          # in the app bundle. Dynamic frameworks (Capacitor/Cordova/...) each get
+          # re-signed at export and reject a provisioning profile, breaking the
+          # app-store export. Static linkage removes them from the bundle entirely.
+          perl -pi -e 's/^\s*use_frameworks!.*$/use_frameworks! :linkage => :static/' ios/App/Podfile
+          echo "----- Podfile linkage -----"; grep -n "use_frameworks" ios/App/Podfile
           npx cap sync ios
 
       - name: Force landscape-only orientation
