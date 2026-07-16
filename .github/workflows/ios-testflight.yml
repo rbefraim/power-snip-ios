@@ -1,22 +1,25 @@
 name: iOS → TestFlight
 
 # Builds Power Snip! on a GitHub-hosted macOS runner and uploads to TestFlight.
-# No Mac required — GitHub provides the macOS machine.
+# MANUAL code signing: a distribution cert (.p12) + App Store provisioning profile
+# are provided as secrets, so we don't depend on cloud-managed distribution certs.
 on:
-  workflow_dispatch:        # click "Run workflow" in the Actions tab
+  workflow_dispatch:
   push:
-    tags: ['v*']            # or push a tag like v1.0.0
+    tags: ['v*']
 
 jobs:
   build:
-    runs-on: macos-14       # GitHub-hosted macOS runner (free minutes on public repos)
+    runs-on: macos-14
     timeout-minutes: 45
 
     env:
       APP_ID: me.yourplace.powersnip
       SCHEME: App
+      PROFILE_NAME: Power Snip App Store
       ASC_KEY_ID:    ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      TEAM_ID:       ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -39,51 +42,75 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationLandscapeRight" "$PLIST"
 
-      # The App Store Connect API key (.p8). Stored as a base64 secret so it never
-      # appears in the repo. This is what replaces "having a Mac with your certs on it".
-      - name: Install App Store Connect API key
+      - name: Disable code signing on CocoaPods targets, re-pod
+        run: |
+          PODFILE=ios/App/Podfile
+          # Inject CODE_SIGNING_ALLOWED=NO for every Pods target so only the App
+          # target consumes the distribution profile (manual signing otherwise
+          # tries to sign each pod framework and fails for lack of a profile).
+          perl -0pi -e 's/(post_install do \|installer\|\n)/$1  installer.pods_project.targets.each do |t|\n    t.build_configurations.each { |c| c.build_settings["CODE_SIGNING_ALLOWED"] = "NO" }\n  end\n/' "$PODFILE"
+          echo "----- patched Podfile post_install -----"; grep -n "CODE_SIGNING_ALLOWED" "$PODFILE" || true
+          (cd ios/App && pod install)
+
+      - name: Install App Store Connect API key (for altool upload)
         run: |
           mkdir -p ~/private_keys
           echo -n "${{ secrets.ASC_KEY_P8_BASE64 }}" | base64 --decode > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
           chmod 600 ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
 
-      # Automatic signing: Xcode fetches/creates the distribution cert + provisioning
-      # profile from App Store Connect using the API key. No manual certificate export.
-      - name: Archive
+      - name: Import distribution certificate + provisioning profile
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KPW="ci-temp-$RANDOM"
+          security create-keychain -p "$KPW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KPW" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          # keep the login keychain in the search list too
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          echo -n "${{ secrets.DIST_P12_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "${{ secrets.DIST_P12_PASSWORD }}" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KPW" "$KEYCHAIN" >/dev/null
+          echo "----- signing identities -----"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          PP_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PP_DIR"
+          echo -n "${{ secrets.DIST_PROFILE_BASE64 }}" | base64 --decode > "$PP_DIR/PowerSnip_AppStore.mobileprovision"
+          echo "installed provisioning profile:"; ls -la "$PP_DIR"
+
+      - name: Archive (manual signing)
         run: |
           xcodebuild -workspace ios/App/App.xcworkspace \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
             PRODUCT_BUNDLE_IDENTIFIER="$APP_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             archive
 
-      - name: Export .ipa
+      - name: Export .ipa (manual, app-store-connect)
         run: |
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
-            <key>method</key><string>app-store</string>
+            <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key><dict>
+              <key>me.yourplace.powersnip</key><string>Power Snip App Store</string>
+            </dict>
             <key>uploadSymbols</key><true/>
-            <key>signingStyle</key><string>automatic</string>
           </dict></plist>
           PLIST
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+            -exportPath "$RUNNER_TEMP/export"
 
       - name: Upload to TestFlight
         run: |
