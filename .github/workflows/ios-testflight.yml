@@ -54,13 +54,18 @@ jobs:
           echo "----- Podfile linkage -----"; grep -n "use_frameworks" ios/App/Podfile
           npx cap sync ios
 
-      - name: Force landscape-only orientation
+      - name: Force landscape orientation + auto-clear export compliance
         run: |
           PLIST=ios/App/App/Info.plist
           /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationLandscapeRight" "$PLIST"
+          # The app uses no non-exempt encryption (only standard HTTPS/OS crypto), so
+          # declare it here — every build then auto-clears App Store export compliance
+          # and goes straight to "Ready to Test" instead of MISSING_EXPORT_COMPLIANCE.
+          /usr/libexec/PlistBuddy -c "Delete :ITSAppUsesNonExemptEncryption" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST"
 
       - name: Install App Store Connect API key (for altool upload)
         run: |
