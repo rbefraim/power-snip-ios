@@ -359,15 +359,24 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (!AdMob) return;
     var cfg = window.POWERSNIP_ADMOB || {};
     var isIOS = !!(C.getPlatform && C.getPlatform() === 'ios');
-    // Real production AdMob unit ids. ANDROID is live (pub-8699327049231437). AdMob unit ids are
-    // PER-PLATFORM: iOS needs its own AdMob app + units, supplied via window.POWERSNIP_ADMOB.ios*.
-    // Until those exist, ads stay OFF on iOS (we never ship a cross-platform/placeholder unit).
-    var REWARDED = isIOS ? cfg.iosRewardedId     : (cfg.rewardedId     || 'ca-app-pub-8699327049231437/3290673006');
-    var INTER    = isIOS ? cfg.iosInterstitialId : (cfg.interstitialId || 'ca-app-pub-8699327049231437/5660283108');
-    var testMode = cfg.testMode === true;
-    if (!REWARDED || !INTER) return;   // iOS before its units are created — ads gracefully absent
+    // Real production AdMob unit ids are PER-PLATFORM. ANDROID is live (pub-8699327049231437).
+    // iOS needs its OWN AdMob app + units created in AdMob and supplied via window.POWERSNIP_ADMOB.ios*
+    // — until then iOS defaults to Google's TEST iOS units so ads are FUNCTIONAL in TestFlight (test
+    // ads only: no revenue, no invalid-activity risk). Swap in the real iOS units for production.
+    var IOS_TEST_REWARDED = 'ca-app-pub-3940256099942544/1712485313';
+    var IOS_TEST_INTER    = 'ca-app-pub-3940256099942544/4411468910';
+    var REWARDED = isIOS ? (cfg.iosRewardedId     || IOS_TEST_REWARDED) : (cfg.rewardedId     || 'ca-app-pub-8699327049231437/3290673006');
+    var INTER    = isIOS ? (cfg.iosInterstitialId || IOS_TEST_INTER)    : (cfg.interstitialId || 'ca-app-pub-8699327049231437/5660283108');
+    // iOS serves TEST ads until real units are configured; Android serves production.
+    var testMode = (cfg.testMode === true) || (isIOS && !cfg.iosRewardedId);
+    if (!REWARDED || !INTER) return;
 
-    AdMob.initialize({ initializeForTesting: testMode }).catch(function () {});
+    // iOS 14.5+ App Tracking Transparency: request before AdMob may use the IDFA (Info.plist carries
+    // NSUserTrackingUsageDescription). Non-blocking — ads still serve non-personalized if declined.
+    function initAds(){ try{ AdMob.initialize({ initializeForTesting: testMode }); }catch(e){} }
+    if (isIOS && AdMob.requestTrackingAuthorization) {
+      Promise.resolve(AdMob.requestTrackingAuthorization()).then(initAds).catch(initAds);
+    } else { initAds(); }
 
     window.PowerSnipAds = {
       rewarded: function () {
