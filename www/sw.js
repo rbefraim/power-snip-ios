@@ -1,7 +1,10 @@
-// Power Snip! service worker — v11
+// Power Snip! service worker — v13
 // Network-first for HTML so shipped fixes reach players immediately;
 // cache-first for static assets; cache is the offline fallback.
-const C = 'power-snip-v11';
+// v13 (2026-07-17): cache-bust to force devices stuck on an old broken index.html
+// (incl. home-screen PWA installs) to discard it — activate() deletes every non-current
+// cache, so a stale 20442832-era build can't keep being served.
+const C = 'power-snip-v16';
 const CORE = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (e) => {

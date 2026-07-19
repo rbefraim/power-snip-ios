@@ -3,7 +3,7 @@ node_modules/
 package-lock.json
 
 # Capacitor generated native projects (regenerated in CI by `npx cap add ios`)
-/ios/
+# /ios/ now committed (pre-built so CI cap-add no-ops, carries custom icon + bumped build number)
 /android/
 
 # Build output
