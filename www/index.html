@@ -568,17 +568,28 @@ document.addEventListener('DOMContentLoaded', async function() {
     function isOwned(id){ try { return localStorage.getItem('ps-web-owned-' + id) === '1'; } catch (e) { return false; } }
     function grant(id){ try { localStorage.setItem('ps-web-owned-' + id, '1'); } catch (e) {}
       if (id === 'supercharged_pack') { try { window.__psGrantPro && window.__psGrantPro(); } catch (e) {} } }
-    window.PowerSnipStore = {
-      purchase: function (id) { id = id || 'supercharged_pack';
-        return fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ product: id }) })
-          .then(function (r) { return r.json(); })
-          .then(function (d) { if (d && d.url) { location.href = d.url; return true; } return false; })
-          .catch(function () { return false; }); },
-      restore: function () { return Promise.resolve(); },                // device-local; no accounts on web
-      priceFor: function (id) { return PRICES[id || 'supercharged_pack'] || null; },
-      owned: function (id) { return isOwned(id || 'supercharged_pack'); },
-      adsRemoved: function () { return isOwned('remove_ads') || isOwned('supercharged_pack'); }
-    };
+    function definePowerSnipStore(){
+      window.PowerSnipStore = {
+        purchase: function (id) { id = id || 'supercharged_pack';
+          return fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ product: id }) })
+            .then(function (r) { return r.json(); })
+            .then(function (d) { if (d && d.url) { location.href = d.url; return true; } return false; })
+            .catch(function () { return false; }); },
+        restore: function () { return Promise.resolve(); },                // device-local; no accounts on web
+        priceFor: function (id) { return PRICES[id || 'supercharged_pack'] || null; },
+        owned: function (id) { return isOwned(id || 'supercharged_pack'); },
+        adsRemoved: function () { return isOwned('remove_ads') || isOwned('supercharged_pack'); }
+      };
+    }
+    // HONEST WEB STORE STATE: only expose PowerSnipStore when Stripe is ACTUALLY configured. Until
+    // then the game's storeAvailable() stays false and it shows its clean "get it in the app" fallback
+    // — never a checkout that instantly fails with "Purchase cancelled." The instant STRIPE_SECRET_KEY
+    // (+ price env) is set on the Pages project, /api/config returns stripe:true and the real Stripe
+    // buy flow lights up with NO code change. (owned entitlements from a prior purchase still restore.)
+    if (isOwned('remove_ads') || isOwned('supercharged_pack')) definePowerSnipStore();   // keep prior purchases working
+    fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+      if (cfg && cfg.stripe) definePowerSnipStore();
+    }).catch(function () {});
     // On return from Stripe: ?paid=<product>&session_id=... -> verify server-side, then grant.
     try { var q = new URLSearchParams(location.search), paid = q.get('paid'), sid = q.get('session_id');
       if (paid && sid) { fetch('/api/verify?session_id=' + encodeURIComponent(sid)).then(function (r) { return r.json(); })
@@ -1261,8 +1272,27 @@ document.addEventListener('DOMContentLoaded', async function() {
     // fails, so on app-resume we re-kick the session (silent buffer + resume, via unlock()) with a
     // few retries. unlock() goes through the guard's wrapped resume, so it stays silent if MUTED
     // and only ever resumes existing contexts (never spawns a 2nd music instance → no double-play).
-    function foregroundKick(){ unlock(); setTimeout(unlock,150); setTimeout(unlock,500); setTimeout(unlock,1200); }
+    // WEB background-resume (mobile Safari): backgrounding suspends the WebAudio session and the
+    // music often does NOT come back on return. resumeAudioNow() both resumes the raw contexts AND
+    // calls the game's OWN ensureAudio() — which resumes the context and, crucially, only restarts
+    // the music scheduler when it has actually died (`if(!this._mus) startMusic()`), so returning
+    // several times never stacks a 2nd music instance. Mute is respected downstream (setVol/schedMusic
+    // gate on state.muted → silent), so a muted game stays muted on resume.
+    function resumeAudioNow(){
+      unlock();
+      try{ var p=W.__ps; if(p && typeof p.ensureAudio==='function') p.ensureAudio(); }catch(e){}
+    }
+    // iOS autoplay policy: a resume() without a user gesture can be refused, leaving audio dead until
+    // the next touch. So on every foreground we ALSO arm a one-shot gesture listener that resumes on
+    // the first touch after return, then removes itself (no accumulation across leave/return cycles).
+    function armGestureResume(){
+      var evs=['pointerdown','touchstart','touchend','mousedown','click','keydown'];
+      function once(){ resumeAudioNow(); for(var i=0;i<evs.length;i++){ try{ D.removeEventListener(evs[i], once, true); }catch(e){} } }
+      for(var i=0;i<evs.length;i++){ try{ D.addEventListener(evs[i], once, true); }catch(e){} }
+    }
+    function foregroundKick(){ resumeAudioNow(); setTimeout(resumeAudioNow,150); setTimeout(resumeAudioNow,500); setTimeout(resumeAudioNow,1200); armGestureResume(); }
     ['focus','pageshow'].forEach(function(ev){ W.addEventListener(ev, foregroundKick); });
+    D.addEventListener('visibilitychange', function(){ if(!D.hidden) foregroundKick(); });   // primary web signal
     D.addEventListener('resume', function(){ foregroundKick(); }, true);   // bfcache/freeze resume
     try {
       var Cap = W.Capacitor, App = Cap && Cap.Plugins && Cap.Plugins.App;
@@ -1539,6 +1569,35 @@ document.addEventListener('DOMContentLoaded', async function() {
     W.addEventListener(ev, function(){ ensure(); setTimeout(ensure,150); setTimeout(ensure,450); });
   });
 })();</script>
+<!-- ===== LEVEL FIX: "The Gauntlet" was UNBEATABLE (runtime data patch, no bundle edit) ===== -->
+<script>(function(){
+  // The shipped "The Gauntlet" put the robot at x920 with the candy at x320 behind a 3-bomb wall.
+  // Cutting the rope in this engine gives the candy almost no horizontal velocity (verified: after a
+  // cut the candy's max-x never exceeds its start), so it could NEVER travel 600px to the target —
+  // the level was impossible, not merely hard. Replace it with a winnable "drop through the gauntlet"
+  // design: a STATIC rope so the candy drops straight down the centre lane, a bomb corridor framing
+  // that lane, and Max's mouth directly below. Verified in WebKit: 10/10 cuts deliver the candy.
+  var FIX = {
+    name: 'The Gauntlet', hint: 'Slice the rope and drop the snack down the gauntlet into Max!', times: [12, 20],
+    robot: { x: 240, y: 600 }, candy: { x: 240, y: 250 },
+    ropes: [{ ax: 240, ay: 150 }],
+    plats: [{ x: -40, y: 694, w: 1360, h: 60 }],
+    bombs: [{ x: 150, y: 400 }, { x: 330, y: 400 }, { x: 150, y: 520 }, { x: 330, y: 520 }]
+  };
+  function apply(){
+    try{
+      var ps = window.__ps; if(!ps || !ps.LEVELS || !ps.LEVELS.length) return false;
+      var i = -1;
+      for(var k=0;k<ps.LEVELS.length;k++){ if(ps.LEVELS[k] && ps.LEVELS[k].name==='The Gauntlet'){ i=k; break; } }
+      if(i<0) return false;
+      if(ps.LEVELS[i].__psFixed) return true;
+      var f = JSON.parse(JSON.stringify(FIX)); f.__psFixed = 1;
+      ps.LEVELS[i] = f;
+      return true;
+    }catch(e){ return false; }
+  }
+  var n=0, iv=setInterval(function(){ if(apply() || ++n>80) clearInterval(iv); }, 200);
+})();</script>
 <!-- ===== BIGGER SIZES — enlarge elements INSIDE the 1280x720 design (NOT a container/stage zoom) ===== -->
 <!-- Container/camera scaling was the wrong lever (fragile + just magnifies the same small layout). This
      enlarges the actual sprites and UI at the source: canvas sprites via wrapping the game's own draw
@@ -1548,9 +1607,15 @@ document.addEventListener('DOMContentLoaded', async function() {
 (function(){
   var W=window, D=document;
   var SPRITE=1.75;     // gameplay canvas sprite scale (character/obstacles) — unmistakably bigger
-  var FOOD=2.15;       // the TARGET food is the focal point → scale it MORE than everything else
+  var FOOD=1.5;        // TARGET food visual scale — still bigger than stock, but closer to its hitbox
   var LABEL=1.8;       // its name pill — bigger than before but not dominating the screen
-  var FOOD_R=1.9;      // and scale its physics radius (candy.r) so the hitbox tracks the visual
+  // FOOD_R was 1.9 and inflated the candy's COLLISION radius (candy.r) 1.9x. That shrank the passable
+  // gaps between obstacles — e.g. The Gauntlet's 3-bomb wall (x560, y120/300/520): the safe corridor
+  // collapsed from ~76px to ~32px — making obstacle levels effectively unbeatable on a touchscreen.
+  // The collision radius MUST stay at the game's ORIGINAL design value so every level keeps the
+  // geometry it was balanced and shipped with. 1.0 = no collision change (food still looks bigger via
+  // the FOOD draw scale above; visual>hitbox is a lenient near-miss, never an invisible hit).
+  var FOOD_R=1.0;      // collision radius unchanged → all 150 levels keep their original, beatable geometry
   var MENU_FS=1.58;    // menu font scale
   var HUD_FS=1.5;      // HUD font/button scale
 
@@ -1627,14 +1692,63 @@ document.addEventListener('DOMContentLoaded', async function() {
   // screen at the bottom) we step the multiplier down until it fits. Result: the largest text that
   // still fits, and nothing is ever cut off. Never steps back up, so it settles instead of oscillating.
   var fsAdj = {};
+  // The level-select grid (screen 'select') is a grid of fixed-height <button> tiles. The generic
+  // grow() below treats each tile as a button and enlarges its number/name/stars/time 2x, which
+  // overflows the FIXED tile height and made the rows visibly OVERLAP. So we detect that grid and
+  // exclude its tiles from the generic pass, then size it properly in selectGridFix().
+  function selectGrid(){
+    if((W.__ps && W.__ps.state && W.__ps.state.screen) !== 'select') return null;
+    var root = screenRoot(); if(!root) return null;
+    var divs = root.getElementsByTagName('div');
+    for(var i=0;i<divs.length;i++){
+      if(getComputedStyle(divs[i]).display === 'grid'){
+        var n=0, ch=divs[i].children;
+        for(var j=0;j<ch.length;j++){ if(ch[j].tagName === 'BUTTON') n++; }
+        if(n >= 12) return divs[i];   // the level grid (12+ tiles); not the small stats/bundle grids
+      }
+    }
+    return null;
+  }
   function bigText(){
     try{
       var scr = (W.__ps && W.__ps.state && W.__ps.state.screen) || '?';
       if(scr === 'playing') return;                 // gameplay HUD is bigHUD()'s job
       var root = screenRoot(); if(!root) return;
       if(fsAdj[scr] == null) fsAdj[scr] = 1;
+      var grid = selectGrid();                      // skip level tiles — selectGridFix() sizes them
       var k = fsAdj[scr], els = root.querySelectorAll('*');
-      for(var i=0;i<els.length;i++){ grow(els[i], (isBtn(els[i]) ? BTN_FS : TXT_FS) * k); tightenMargins(els[i]); }
+      for(var i=0;i<els.length;i++){
+        if(grid && grid.contains(els[i])) continue;
+        grow(els[i], (isBtn(els[i]) ? BTN_FS : TXT_FS) * k); tightenMargins(els[i]);
+      }
+    }catch(e){}
+  }
+
+  // (2c) LEVEL-SELECT GRID — bigger, legible, NON-overlapping, scrollable for all 150 levels.
+  // Root cause of the overlap was the tiles' FIXED height (clamp(86,13vw,120)) + our font growth:
+  // enlarged content overflowed the fixed box into neighbouring rows. Fix: responsive columns +
+  // AUTO row height (tiles grow to fit their content, so rows can never overlap) + internal scroll,
+  // then a controlled, matched enlargement of the tile number/name/stars/time.
+  function selectGridFix(){
+    try{
+      var grid = selectGrid(); if(!grid) return;
+      grid.style.setProperty('grid-template-columns','repeat(auto-fill, minmax(clamp(84px,15vw,120px), 1fr))','important');
+      grid.style.setProperty('gap','10px','important');
+      grid.style.setProperty('max-height','74vh','important');
+      grid.style.setProperty('overflow-y','auto','important');
+      var tiles = grid.children;
+      for(var i=0;i<tiles.length;i++){
+        var t = tiles[i]; if(t.tagName !== 'BUTTON') continue;
+        t.style.setProperty('height','auto','important');            // AUTO height => no overflow => no overlap
+        t.style.setProperty('min-height','clamp(94px,15vw,130px)','important');
+        t.style.setProperty('padding','12px 6px','important');
+        t.style.setProperty('justify-content','center','important');
+        var k = t.children;                                          // [0]=number [1]=name [2]=stars [3]=best time
+        if(k[0]) grow(k[0], 1.55);   // level number — big & clearly legible
+        if(k[1]) grow(k[1], 1.30);   // level name
+        if(k[2]) grow(k[2], 1.35);   // star row
+        if(k[3]) grow(k[3], 1.45);   // best time
+      }
     }catch(e){}
   }
 
@@ -1650,6 +1764,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     try{
       var scr = (W.__ps && W.__ps.state && W.__ps.state.screen) || '?';
       if(scr === 'playing') return;                 // never touch gameplay
+      if(scr === 'select') return;                  // grid handles its own height via internal scroll
       var root = screenRoot(); if(!root) return;
       for(var i=0;i<root.children.length;i++){
         var ch = root.children[i];
@@ -1703,11 +1818,61 @@ document.addEventListener('DOMContentLoaded', async function() {
     }catch(e){}
   }
 
-  function tick(){ wrapSprites(); bigFoodHitbox(); hideCredit(); bigText(); fitPanel(); bigHUD(); }
+  // (4) NO SIZE-POP ON END-OF-ROUND SCREENS.
+  // The results / game-over / high-score card uses `animation:psPopIn` (scale .2 -> 1.12 -> 1), so it
+  // "appears small first then pops to large" — and our font enlargement (bigText) landing a frame
+  // later made it a visible size JUMP. On those screens, swap the scale-from-small entrance for a
+  // scale-FREE fade: the card is at its FINAL size on the very first paint and only its opacity
+  // animates. Combined with the synchronous apply below (grow runs in the observer microtask, before
+  // paint), the card settles at its large final size with no small-then-large flash. Other screens
+  // (intro, etc.) keep psPopIn untouched — only end-of-round screens were flagged.
+  var RESULT_SCREENS = { won:1, failed:1, unlock:1 };
+  function curScr(){ return (W.__ps && W.__ps.state && W.__ps.state.screen) || '?'; }
+  // Kill the scale-from-small POP at the KEYFRAME level, not per element. A per-element animation
+  // swap raced React: when it re-created the results card node (animating stars), the fresh node got
+  // psPopIn back and our swap missed it — verified landscape still scaled all the way to settled.
+  // Instead, while on an end-of-round screen, REDEFINE @keyframes psPopIn to an opacity-only fade
+  // (no transform). Same keyframe NAME, last in document order, wins for EVERY element using it —
+  // current or future — so React re-renders can't defeat it and there is no timing window. The card
+  // is at its final size on the first painted frame; the opacity fade also masks the 1-frame
+  // font-enlargement settle (the card is still near-transparent while bigText lands). Scoped to
+  // result screens (injected on enter, removed on leave) so intro/other psPopIn users are untouched.
+  function noPopResults(){
+    try{
+      var host = D.body || D.documentElement;
+      var kf = D.getElementById('ps-popin-soft');
+      if(RESULT_SCREENS[curScr()]){
+        if(!kf){
+          kf = D.createElement('style'); kf.id = 'ps-popin-soft';
+          kf.textContent = '@keyframes psPopIn{0%{transform:none;opacity:0}100%{transform:none;opacity:1}}';
+          host.appendChild(kf);
+        } else if(kf !== host.lastElementChild){
+          host.appendChild(kf);   // keep it LAST so our keyframe definition always wins the name
+        }
+      } else if(kf && kf.parentNode){
+        kf.parentNode.removeChild(kf);   // off result screens: restore the game's original psPopIn
+      }
+    }catch(e){}
+  }
+
+  function tick(){ wrapSprites(); bigFoodHitbox(); hideCredit(); noPopResults(); bigText(); selectGridFix(); fitPanel(); bigHUD(); }
   // Throttle: the game rewrites the timer text every frame (fires the observer rapidly); cap the DOM
-  // scans to ~5x/sec so re-applying after a rebuild is never a per-frame cost.
-  var _last=0;
-  function throttled(){ var now=Date.now(); if(now-_last<200) return; _last=now; tick(); }
+  // scans to ~5x/sec so re-applying after a rebuild is never a per-frame cost. EXCEPTION: when the
+  // SCREEN itself changes (e.g. -> 'won'), apply IMMEDIATELY and synchronously — the observer callback
+  // is a microtask that runs BEFORE the next paint, so scaling the new screen here means it is drawn
+  // large on its first frame (no small-then-large pop). Then re-apply for a few animation frames to
+  // catch elements the screen adds a beat later (animated stars/score), also before their paint.
+  var _last=0, _lastScreen=null;
+  function raf(f){ (W.requestAnimationFrame||function(g){ setTimeout(g,16); })(f); }
+  function throttled(){
+    var scr=curScr();
+    if(scr!==_lastScreen){
+      _lastScreen=scr; _last=Date.now(); tick();
+      var n=5, pump=function(){ if(n--<=0) return; tick(); raf(pump); }; raf(pump);
+      return;
+    }
+    var now=Date.now(); if(now-_last<200) return; _last=now; tick();
+  }
   tick();
   setInterval(tick, 500);
   try { new MutationObserver(throttled).observe(D.documentElement, {childList:true, subtree:true}); } catch(e){}
