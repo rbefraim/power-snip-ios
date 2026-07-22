@@ -1717,7 +1717,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       P[name]=function(){ var a=arguments, ctx=a[0], c=null; try{ c=getC(a,P.g); }catch(e){}
         if(c && ctx && ctx.save){ ctx.save(); try{ ctx.translate(c.x,c.y); ctx.scale(sc,sc); ctx.translate(-c.x,-c.y); return orig.apply(P,a); } finally{ ctx.restore(); } }
         return orig.apply(P,a); }; }
-    wrap('drawRobot', function(a,g){ return g&&g.robot?{x:g.robot.x,y:g.robot.y}:null; });   // the character (Max)
+    // Max (drawRobot) is DELIBERATELY NOT scaled here. The game already grows him progressively by
+    // stage: stage = min(4, floor(level/4)) (5 at level 23+), driving sw/arm/sc2 up (sc2 1.12→1.62).
+    // A flat SPRITE=1.75x on top made him too big from level 1 (Ronen: "Max looks too big when you
+    // start — he needs to grow only as he moves through the screens"). Leaving Max unscaled restores
+    // start-small-then-grow. (Food/obstacles still get their own scale below.)
     wrap('drawCandy',     function(a){ return a[1]?{x:a[1].x,y:a[1].y}:null; }, FOOD);        // the food/target — BIGGER
     wrap('drawFoodLabel', function(a){ return a[1]?{x:a[1].x,y:a[1].y}:null; }, LABEL);       // its name pill — bigger
     wrap('drawBomb',  function(a){ return a[1]?{x:a[1].x,y:a[1].y}:null; });                 // spinning mines
