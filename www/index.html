@@ -219,7 +219,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   // returns before its first line of work, so this reset never ran. It runs unconditionally now,
   // and BEFORE the guard reads the flag. One time per device; a genuine later mute still sticks.
   try {
-    var KEY = 'power-snip-mastermute', SAVE = 'power-snip-save', RESET = 'ps-audio-reset-20260719';
+    var KEY = 'power-snip-mastermute', SAVE = 'power-snip-save', RESET = 'ps-audio-reset-20260721';
     if (localStorage.getItem(RESET) !== '1') {
       localStorage.removeItem(KEY);
       // THE ACTUAL CULPRIT for "no music on web": the GAME keeps its OWN mute inside its save
@@ -248,15 +248,19 @@ document.addEventListener('DOMContentLoaded', async function() {
   var muted = false;
   try { muted = localStorage.getItem(KEY) === '1'; } catch(e){}
 
-  function shouldSilence(){ return muted || document.hidden; }
+  // VISIBILITY ONLY. Do NOT factor mute into this. The game mutes by setting its master gain to 0
+  // (setVol) — a muted game with a RUNNING context is silent and correct. Previously this also
+  // blocked on `muted`, so a stale/stuck mute flag made resume() a permanent no-op → the context
+  // NEVER resumed → literally no music/SFX ever, even after unmuting. That was the "no music" bug.
+  function shouldSilence(){ return document.hidden; }
 
   // Wrap AudioContext so we can see every context the game creates.
   var rawResume = AC.prototype.resume;
   var rawSuspend = AC.prototype.suspend;
   AC.prototype.resume = function(){
-    // Refuse to resume while muted or backgrounded — the game calls resume() on
-    // every user gesture, which would otherwise defeat the guard.
-    if (shouldSilence()) { return Promise.resolve(); }
+    // Only refuse while the tab is actually backgrounded. When visible, ALWAYS allow resume so the
+    // context can start/continue — mute is a gain concern, not a reason to keep the context asleep.
+    if (document.hidden) { return Promise.resolve(); }
     return rawResume.apply(this, arguments);
   };
   function Wrapped(){
@@ -275,7 +279,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       var c = CTXS[i];
       try {
         if (silence) { if (c.state === 'running') rawSuspend.call(c); }
-        else { if (c.state === 'suspended') rawResume.call(c); }
+        // Resume whenever NOT running — iOS Safari backgrounds the audio session to 'interrupted'
+        // (a WebKit-specific state), NOT 'suspended'; a 'suspended'-only check left music dead on iOS.
+        else { if (c.state !== 'running') rawResume.call(c); }
       } catch(e){}
     }
     var b = document.getElementById('ps-master-mute');
@@ -302,35 +308,13 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Belt-and-braces: the game re-creates/resumes audio on its own schedule.
   setInterval(apply, 500);
 
-  function mount(){
-    if (document.getElementById('ps-master-mute')) return;
-    var b = document.createElement('button');
-    b.id = 'ps-master-mute';
-    b.type = 'button';
-    b.textContent = muted ? '\u{1F507}' : '\u{1F50A}';
-    b.style.cssText = [
-      'position:fixed','right:16px','bottom:16px','z-index:2147483647',
-      'width:58px','height:58px','border-radius:999px','border:0','cursor:pointer',
-      'background:rgba(255,255,255,.94)','color:#17333a','font-size:27px','line-height:1',
-      'box-shadow:0 7px 20px rgba(16,49,58,.30)','display:flex','align-items:center',
-      'justify-content:center','padding:0','touch-action:manipulation',
-      '-webkit-tap-highlight-color:transparent'
-    ].join(';');
-    b.addEventListener('click', function(ev){
-      ev.stopPropagation(); ev.preventDefault();
-      muted = !muted;
-      try { localStorage.setItem(KEY, muted ? '1' : '0'); } catch(e){}
-      apply();
-    }, false);
-    // Don't let the canvas see this tap as a rope-cut drag.
-    ['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup'].forEach(function(t){
-      b.addEventListener(t, function(ev){ ev.stopPropagation(); }, false);
-    });
-    document.body.appendChild(b);
-    apply();
-  }
+  // NO separate mute button. The game already has its own ♪ mute in the HUD (top-right); a second
+  // always-on mute here was redundant and confusing, and its `muted` flag fed the resume-block that
+  // killed audio. Remove any previously-mounted one; the guard is now purely visibility-based.
+  function mount(){ var old = document.getElementById('ps-master-mute'); if (old && old.parentNode) old.parentNode.removeChild(old); apply(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();
+  setInterval(mount, 1000);   // ensure it stays gone if the game rebuilds the DOM
 })();
 </script>
 
@@ -564,7 +548,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     var C = window.Capacitor;
     if (C && C.isNativePlatform && C.isNativePlatform()) return;         // native → real IAP, not Stripe
     if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
-    var PRICES = { remove_ads: '$2.99', supercharged_pack: '$4.99' };
+    var PRICES = { remove_ads: '$3.99', supercharged_pack: '$3.99' };   // single unlock: $3.99 (removes ads + unlocks all)
     function isOwned(id){ try { return localStorage.getItem('ps-web-owned-' + id) === '1'; } catch (e) { return false; } }
     function grant(id){ try { localStorage.setItem('ps-web-owned-' + id, '1'); } catch (e) {}
       if (id === 'supercharged_pack') { try { window.__psGrantPro && window.__psGrantPro(); } catch (e) {} } }
@@ -1258,9 +1242,23 @@ document.addEventListener('DOMContentLoaded', async function() {
       try{ W[name]=Wrapped; }catch(e){}
     });
     function unlock(){
+      // START music on the first real user gesture (iOS requires a gesture to begin an AudioContext).
+      // ensureAudio() is idempotent — it creates the context + starts music only if not already going,
+      // and resumes a suspended one — so calling it on every gesture is safe (no double-play).
+      try{ var p=W.__ps; if(p && typeof p.ensureAudio==='function') p.ensureAudio(); }catch(e){}
       for(var i=0;i<ctxs.length;i++){ var c=ctxs[i];
-        try{ if(c.state==='suspended'&&c.resume) c.resume(); }catch(e){}
+        // resume on ANY non-running state (iOS uses 'interrupted', not 'suspended', after background)
+        try{ if(c.state!=='running'&&c.resume) c.resume(); }catch(e){}
         try{ if(!c.__k){ var b=c.createBuffer(1,1,22050),s=c.createBufferSource(); s.buffer=b; s.connect(c.destination); s.start(0); c.__k=1; } }catch(e){}
+      }
+      // iOS auto-recovery: when a context flips OUT of 'running' (interruption) while we're visible &
+      // not backgrounded, try to bring it right back — one listener per context, added once.
+      for(var k=0;k<ctxs.length;k++){ var cc=ctxs[k];
+        if(cc.__psSC) continue; cc.__psSC=1;
+        try{ cc.addEventListener('statechange', function(ev){
+          var ctx=ev.target;
+          if(ctx.state!=='running' && !D.hidden){ try{ ctx.resume(); }catch(e){} }
+        }); }catch(e){}
       }
     }
     ['pointerdown','touchstart','touchend','mousedown','keydown','click'].forEach(function(ev){
@@ -1598,6 +1596,99 @@ document.addEventListener('DOMContentLoaded', async function() {
   }
   var n=0, iv=setInterval(function(){ if(apply() || ++n>80) clearInterval(iv); }, 200);
 })();</script>
+<!-- ===== CROSS-PROMO: one tasteful "More games" chip on the MENU (studio + arcade) ===== -->
+<script>(function(){
+  if (window.__psXpromo) return; window.__psXpromo = 1;
+  var W = window, D = document;
+  var ARCADE = 'https://themachine-arcade.pages.dev';
+  var STUDIO = 'https://themachinegames.pages.dev';
+  // Open externally: web -> new tab; Capacitor native -> system browser (Browser plugin, else window.open).
+  function openUrl(u){
+    try{
+      var C = W.Capacitor;
+      if (C && C.isNativePlatform && C.isNativePlatform()){
+        var B = C.Plugins && C.Plugins.Browser;
+        if (B && B.open){ B.open({ url:u }); return; }
+      }
+    }catch(e){}
+    try{ W.open(u, '_blank', 'noopener'); }catch(e){}
+  }
+  function link(label, url){
+    var a = D.createElement('span');
+    a.textContent = label;
+    a.style.cssText = 'color:#ffd23f;font-weight:800;cursor:pointer;text-decoration:underline;text-underline-offset:2px;white-space:nowrap';
+    // swallow the pointer stream so a tap here never registers as a rope-cut drag on the canvas
+    ['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'].forEach(function(t){
+      a.addEventListener(t, function(ev){ ev.stopPropagation(); }, false);
+    });
+    a.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); openUrl(url); }, false);
+    return a;
+  }
+  var el = null;
+  function build(){
+    var box = D.createElement('div');
+    box.id = 'ps-xpromo';
+    box.setAttribute('role','navigation');
+    box.style.cssText = [
+      'position:fixed','left:calc(env(safe-area-inset-left,0px) + 8px)','top:6px',
+      'z-index:2147483001','display:none','align-items:center','gap:8px','max-width:94vw','box-sizing:border-box',
+      'padding:7px 15px','border-radius:999px','background:rgba(13,53,64,.82)','backdrop-filter:blur(3px)',
+      '-webkit-backdrop-filter:blur(3px)','box-shadow:0 4px 14px rgba(16,49,58,.28)',
+      "font-family:'Baloo 2','Nunito',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+      'font-size:13px','line-height:1','color:#cfe8ee','-webkit-tap-highlight-color:transparent','pointer-events:auto'
+    ].join(';');
+    var pre = D.createElement('span');
+    pre.textContent = '🕹️ More games:';
+    pre.style.cssText = 'font-weight:700;color:#a9d6dd;white-space:nowrap';
+    box.appendChild(pre);
+    box.appendChild(link('The Machine Arcade', ARCADE));
+    var dot = D.createElement('span'); dot.textContent = '·'; dot.style.cssText = 'color:#6d8f97'; box.appendChild(dot);
+    box.appendChild(link('The Machine Games', STUDIO));
+    return box;
+  }
+  function onMenu(){ return !!(W.__ps && W.__ps.state && W.__ps.state.screen === 'title'); }
+  // Place the pill in a DOM-CLEAR vertical band so it never overlaps a menu button/label. Prefer the
+  // clear space BELOW every menu element; if the menu fills the bottom (it does on tall phones), tuck
+  // the pill just ABOVE the top-most menu element (the sky gap above the tagline). Measured live each
+  // time so it adapts to any layout — no fixed bottom that collided with the Share/Rate row.
+  function place(){
+    try{
+      var vh=W.innerHeight, vw=W.innerWidth, ph=el.offsetHeight||34;
+      var lowest=0, highest=vh, all=D.querySelectorAll('button,[role=button],h1,h2,h3,p,span');
+      for(var i=0;i<all.length;i++){ var n=all[i];
+        if(n===el || el.contains(n)) continue;
+        if(n.children.length) continue;                          // leaf text / buttons only
+        var t=(n.textContent||'').trim(); if(!t) continue;
+        var r=n.getBoundingClientRect();
+        if(r.width<10 || r.height<6 || r.width>vw*0.96) continue; // skip tiny + full-width containers
+        if(r.bottom<=0 || r.top>=vh) continue;
+        if(r.bottom>lowest) lowest=r.bottom;
+        if(r.top<highest) highest=r.top;
+      }
+      // Prefer clear room BELOW every menu element; otherwise pin to the very TOP. The top strip holds
+      // only ambient canvas art (the shake's thin rope + cloud tops) — NO buttons and NO text labels
+      // live there, unlike the crowded middle (the canvas tagline) and bottom (Share/Rate). Tucking
+      // "just above the top-most DOM element" landed the pill ON the canvas tagline, so we don't do that.
+      var y;
+      if(vh - lowest >= ph + 12) y = vh - ph - 10;               // clear room below EVERYTHING
+      else y = 6;                                                // else the clear top strip
+      el.style.setProperty('top', Math.round(y)+'px','important');
+      el.style.setProperty('bottom','auto','important');
+    }catch(e){}
+  }
+  function ensure(){
+    try{
+      if (!el || !D.body.contains(el)) { el = build(); D.body.appendChild(el); }
+      var show = onMenu();
+      el.style.setProperty('display', show ? 'flex' : 'none', 'important');
+      if (show) place();
+    }catch(e){}
+  }
+  if (D.readyState === 'loading') D.addEventListener('DOMContentLoaded', ensure); else ensure();
+  setInterval(ensure, 500);
+  // the game rebuilds the DOM (wipes appended nodes) — re-append on mutations
+  try { new MutationObserver(ensure).observe(D.documentElement, { childList:true, subtree:true }); } catch(e){}
+})();</script>
 <!-- ===== BIGGER SIZES — enlarge elements INSIDE the 1280x720 design (NOT a container/stage zoom) ===== -->
 <!-- Container/camera scaling was the wrong lever (fragile + just magnifies the same small layout). This
      enlarges the actual sprites and UI at the source: canvas sprites via wrapping the game's own draw
@@ -1649,6 +1740,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   function hideCredit(){
     try{ var els=D.querySelectorAll('span,div,p');
       for(var i=0;i<els.length;i++){ var el=els[i]; if(el.children.length) continue;
+        if(el.closest && el.closest('#ps-xpromo')) continue;   // our cross-promo INTENTIONALLY names the studio
         var t=(el.textContent||'').trim();
         if(/GRP Addictive|The Machine Games|by GRP/i.test(t) && el.style.display!=='none') el.style.setProperty('display','none','important');
       } }catch(e){}
@@ -1713,6 +1805,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     try{
       var scr = (W.__ps && W.__ps.state && W.__ps.state.screen) || '?';
       if(scr === 'playing') return;                 // gameplay HUD is bigHUD()'s job
+      // The 'intro' onboarding is a DESIGNED narrative panel (title + copy sized to fit its dark box).
+      // Blindly enlarging its fonts blew the title OUT of the panel (Ronen: "text outside its
+      // container"). Leave the intro's own type alone — fitPanel() already scales the whole panel as a
+      // unit to the viewport, preserving the title↔panel proportions so nothing overflows.
+      if(scr === 'intro') return;
       var root = screenRoot(); if(!root) return;
       if(fsAdj[scr] == null) fsAdj[scr] = 1;
       var grid = selectGrid();                      // skip level tiles — selectGridFix() sizes them
@@ -1807,12 +1904,24 @@ document.addEventListener('DOMContentLoaded', async function() {
       if(!stage || !stage.children[1]) return;
       var bar=stage.children[1], els=bar.querySelectorAll('*');
       for(var j=0;j<els.length;j++){ var el=els[j];
-        grow(el, HUD_FS);
-        // round icon buttons are sized by width/height, not font — scale those in place
+        // round icon buttons (top-right restart / levels / music) — Ronen: too small. Size them
+        // INTRINSICALLY (width/height in the game's own coords, NOT a container transform) to a clear
+        // tap target, and scale their glyph to match. data-ps-w holds the TRUE natural width (stashed
+        // once) so this is idempotent and never compounds.
         var r=el.getBoundingClientRect(), cs=getComputedStyle(el);
-        if(r.width>18 && Math.abs(r.width-r.height)<6 && parseFloat(cs.borderRadius)>=r.width*0.4){
+        var round = r.width>18 && Math.abs(r.width-r.height)<8 && parseFloat(cs.borderRadius)>=r.width*0.4;
+        if(round){
           var w=el.getAttribute('data-ps-w'); if(w==null){ w=el.offsetWidth; el.setAttribute('data-ps-w', w); }
-          if(w>0){ el.style.setProperty('width',(w*HUD_FS).toFixed(0)+'px','important'); el.style.setProperty('height',(w*HUD_FS).toFixed(0)+'px','important'); }
+          w=parseFloat(w)||el.offsetWidth;
+          if(w>0){
+            var sz=Math.max(w*2.6, 120);                    // SUBSTANTIALLY bigger, min 120 design px
+            el.style.setProperty('width', sz.toFixed(0)+'px','important');
+            el.style.setProperty('height', sz.toFixed(0)+'px','important');
+            el.style.setProperty('flex','0 0 auto','important');   // hold the bigger size in the flex row
+            grow(el, Math.min(sz/w, 3.0));                  // glyph fills the bigger button
+          }
+        } else {
+          grow(el, HUD_FS);                                 // timer / level pill text
         }
       }
     }catch(e){}
@@ -1839,23 +1948,68 @@ document.addEventListener('DOMContentLoaded', async function() {
   // result screens (injected on enter, removed on leave) so intro/other psPopIn users are untouched.
   function noPopResults(){
     try{
+      // BULLETPROOF, no race: inject the opacity-only psPopIn override UNCONDITIONALLY from the very
+      // first tick (page load), and keep it as the LAST style in the document so its @keyframes always
+      // wins the name — for EVERY element using psPopIn, present or future. Previously this was gated
+      // on the result screen, which left a 1-2 frame window where the card could render with the
+      // scale-from-small psPopIn before the override was injected — that's the residual "small then
+      // large" pop. Injecting it globally up-front removes the window entirely. (Intro's psPopIn also
+      // becomes a gentle fade — unobjectionable, and Ronen wants ZERO scale pops.)
       var host = D.body || D.documentElement;
       var kf = D.getElementById('ps-popin-soft');
-      if(RESULT_SCREENS[curScr()]){
-        if(!kf){
-          kf = D.createElement('style'); kf.id = 'ps-popin-soft';
-          kf.textContent = '@keyframes psPopIn{0%{transform:none;opacity:0}100%{transform:none;opacity:1}}';
-          host.appendChild(kf);
-        } else if(kf !== host.lastElementChild){
-          host.appendChild(kf);   // keep it LAST so our keyframe definition always wins the name
-        }
-      } else if(kf && kf.parentNode){
-        kf.parentNode.removeChild(kf);   // off result screens: restore the game's original psPopIn
+      if(!kf){
+        kf = D.createElement('style'); kf.id = 'ps-popin-soft';
+        kf.textContent = '@keyframes psPopIn{0%{transform:none;opacity:0}100%{transform:none;opacity:1}}';
+        host.appendChild(kf);
+      } else if(kf !== host.lastElementChild){
+        host.appendChild(kf);   // keep it LAST so our keyframe definition always wins
       }
     }catch(e){}
   }
 
-  function tick(){ wrapSprites(); bigFoodHitbox(); hideCredit(); noPopResults(); bigText(); selectGridFix(); fitPanel(); bigHUD(); }
+  // (5) SINGLE-PRODUCT STORE — one clean offer, no confusing multi-item "bundle".
+  // The store card renders a 5-game icon grid (#ps-bundle) + an "Unlock the bundle" button. Strategy
+  // for a casual game: ONE obvious purchase. Hide the game grid, relabel the button to the single
+  // "Remove Ads & Unlock All — $3.99" offer, and de-reference "plus every game below" in the blurb.
+  // DOM-level (the store markup is in the minified bundle); the button's onclick is a property and
+  // survives innerHTML changes, so the real Stripe purchase handler is untouched.
+  function storeClean(){
+    try{
+      var grid = D.getElementById('ps-bundle');
+      if(grid && grid.style.display !== 'none') grid.style.setProperty('display','none','important');
+      var els = D.querySelectorAll('button, div, span, p');
+      for(var i=0;i<els.length;i++){
+        var el = els[i], t = el.textContent || '';
+        if(el.tagName === 'BUTTON' && /unlock the bundle/i.test(t) && !el.getAttribute('data-ps-relabel')){
+          el.innerHTML = '⚡ Remove Ads &amp; Unlock All — $3.99';
+          el.setAttribute('data-ps-relabel','1');
+        }
+        if(el.children.length === 0 && /plus every game below/i.test(t) && !el.getAttribute('data-ps-reblurb')){
+          el.textContent = 'Remove ads and unlock all 50 levels — a one-time lifetime unlock.';
+          el.setAttribute('data-ps-reblurb','1');
+        }
+      }
+    }catch(e){}
+  }
+
+  // (6) BOTTOM HINT STRIP — the gameplay tip pill ("Drag across the rope to slice it!") was tiny.
+  // Enlarge its font INTRINSICALLY (not a transform). Idempotent via grow()'s stashed original.
+  function bigHint(){
+    try{
+      if(curScr() !== 'playing') return;
+      var els=D.querySelectorAll('div,span,p');
+      for(var i=0;i<els.length;i++){
+        var el=els[i]; if(el.children.length) continue;
+        var t=(el.textContent||'').trim(); if(t.length<4) continue;
+        if(/\b(slice|drag|swipe|bubble|rope|retry|tap|pop|cut)\b/i.test(t)){
+          var r=el.getBoundingClientRect();
+          if(r.top > W.innerHeight*0.62){ grow(el, 1.7); }   // only the BOTTOM hint strip
+        }
+      }
+    }catch(e){}
+  }
+
+  function tick(){ wrapSprites(); bigFoodHitbox(); hideCredit(); noPopResults(); bigText(); selectGridFix(); storeClean(); bigHint(); fitPanel(); bigHUD(); }
   // Throttle: the game rewrites the timer text every frame (fires the observer rapidly); cap the DOM
   // scans to ~5x/sec so re-applying after a rebuild is never a per-frame cost. EXCEPTION: when the
   // SCREEN itself changes (e.g. -> 'won'), apply IMMEDIATELY and synchronously — the observer callback
