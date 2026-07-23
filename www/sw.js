@@ -4,7 +4,7 @@
 // v13 (2026-07-17): cache-bust to force devices stuck on an old broken index.html
 // (incl. home-screen PWA installs) to discard it — activate() deletes every non-current
 // cache, so a stale 20442832-era build can't keep being served.
-const C = 'power-snip-v18';
+const C = 'power-snip-v19';
 const CORE = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (e) => {
