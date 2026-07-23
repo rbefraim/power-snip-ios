@@ -776,11 +776,23 @@ document.addEventListener('DOMContentLoaded', async function() {
   // NOTHING in TestFlight. Route through the Capacitor Share plugin so the REAL iOS share sheet opens
   // (Messages, WhatsApp, Instagram, Mail, etc.). Returns a Promise<'shared'|'cancelled'|false>, or
   // null when not native (caller then uses the web navigator.share/clipboard path).
-  function nativeShare(data) {
+  // Resolve a native Capacitor plugin robustly: Capacitor.Plugins.X may not be pre-populated for a
+  // bare native plugin (no JS wrapper bundled), so fall back to registerPlugin('X') which returns a
+  // working proxy to the installed native plugin. This is what makes Share actually fire on iOS.
+  function nativePlugin(name) {
     try {
       var C = window.Capacitor;
-      if (C && C.isNativePlatform && C.isNativePlatform() && C.Plugins && C.Plugins.Share) {
-        return C.Plugins.Share.share({ title: data.title, text: data.text, url: data.url, dialogTitle: 'Share Power Snip!' })
+      if (!C || !C.isNativePlatform || !C.isNativePlatform()) return null;
+      if (C.Plugins && C.Plugins[name]) return C.Plugins[name];
+      if (typeof C.registerPlugin === 'function') return C.registerPlugin(name);
+    } catch (e) {}
+    return null;
+  }
+  function nativeShare(data) {
+    try {
+      var Share = nativePlugin('Share');
+      if (Share && Share.share) {
+        return Share.share({ title: data.title, text: data.text, url: data.url, dialogTitle: 'Share Power Snip!' })
           .then(function () { return 'shared'; })
           .catch(function (e) { return (e && /cancel/i.test(String((e && e.message) || e))) ? 'cancelled' : false; });
       }
@@ -857,11 +869,16 @@ document.addEventListener('DOMContentLoaded', async function() {
       var rate = mkBtn('⭐ Rate us', true);
       rate.onclick = function () {
         try {
-          var S = window.PowerSnipStore, C = window.Capacitor;
-          if (S && S.rate) { Promise.resolve(S.rate()).catch(function () {}); }
-          else if (S && S.storeUrl) {
-            if (C && C.isNativePlatform && C.isNativePlatform() && C.Plugins && C.Plugins.Browser) C.Plugins.Browser.open({ url: S.storeUrl });
-            else window.open(S.storeUrl, '_blank', 'noopener');
+          // NATIVE iOS: fire the real App Store rating prompt (SKStoreReviewController via the
+          // in-app-review plugin). NOTE: Apple suppresses this prompt in TestFlight/dev builds — it
+          // only shows in a public App Store install — so this modal is also the visible acknowledgement.
+          var IAR = nativePlugin('InAppReview');
+          if (IAR && IAR.requestReview) { Promise.resolve(IAR.requestReview()).catch(function () {}); }
+          else {
+            // Web (or plugin unavailable): open the App Store review page if the Arcade... i.e. our app
+            // is public; else just acknowledge. ARCADE_APPSTORE_ID pattern reused for our own id later.
+            var S = window.PowerSnipStore;
+            if (S && S.storeUrl) window.open(S.storeUrl, '_blank', 'noopener');
           }
         } catch (e) {}
         rate.innerHTML = '💛 Thank you!'; setTimeout(close, 900);
@@ -1999,7 +2016,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   // (3) HUD — enlarge the level pill / timer text and the round control buttons, in place.
   function bigHUD(){
     try{
-      if(!(W.__ps && W.__ps.state && W.__ps.state.screen==='playing')) return;
+      // The restart/levels/music buttons + timer show on playing AND the won/failed screens (hudOn).
+      // Enlarge them on ALL of those so the 3 controls are never tiny (Ronen: too small on some screens).
+      var sc = W.__ps && W.__ps.state && W.__ps.state.screen;
+      if(sc!=='playing' && sc!=='won' && sc!=='failed') return;
       var ds=D.getElementsByTagName('div'), stage=null;
       for(var i=0;i<ds.length;i++){ if(ds[i].offsetWidth===1280 && ds[i].offsetHeight===720){ stage=ds[i]; break; } }
       if(!stage || !stage.children[1]) return;
