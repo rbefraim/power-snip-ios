@@ -2052,18 +2052,53 @@ document.addEventListener('DOMContentLoaded', async function() {
   // first pointer/touch/click we set the playback audio session (audible with the ring switch off)
   // and call the game's ensureAudio() to create+resume the context. Runs once, then detaches.
   (function(){
-    var done = false;
+    var EVS = ['pointerdown','touchend','click','keydown'];
+    function acRunning(){ try{ return W.__ps && W.__ps.actx && W.__ps.actx.state === 'running'; }catch(e){ return false; } }
     function unlock(){
-      if(done) return; done = true;
       try{ if(navigator.audioSession) navigator.audioSession.type = 'playback'; }catch(e){}
       try{ if(W.__ps && W.__ps.ensureAudio) W.__ps.ensureAudio(); }catch(e){}
-      ['pointerdown','touchend','click','keydown'].forEach(function(ev){
-        D.removeEventListener(ev, unlock, true);
-      });
+      try{ if(W.__ps && W.__ps.actx && W.__ps.actx.state === 'suspended') W.__ps.actx.resume(); }catch(e){}
+      // Only stop listening once the context is actually RUNNING — a first gesture that lands before
+      // the game instance exists (or that iOS declines) must not permanently give up.
+      if(acRunning()){ EVS.forEach(function(ev){ D.removeEventListener(ev, unlock, true); }); }
     }
-    ['pointerdown','touchend','click','keydown'].forEach(function(ev){
-      D.addEventListener(ev, unlock, true);
-    });
+    EVS.forEach(function(ev){ D.addEventListener(ev, unlock, true); });
+  })();
+
+  // (2d) SOUND AFFORDANCE + LIVE DIAGNOSTIC — a small pill that (a) lets the player turn sound on with
+  // one tap and (b) shows the real AudioContext state on the DEVICE (headless browsers can't verify
+  // on-device audio, so this reports the truth from the phone). Shows "🔊 Tap for sound" while audio is
+  // NOT running; hides automatically once the context reaches 'running'. Tapping forces the playback
+  // session + ensureAudio + an audible test chime, so if it still won't play we learn the context state.
+  (function(){
+    function el(){
+      var b = D.getElementById('ps-snd');
+      if(!b){
+        b = D.createElement('div'); b.id = 'ps-snd';
+        b.style.cssText = 'position:fixed;z-index:2147483601;left:max(env(safe-area-inset-left,0px),12px);'
+          + 'bottom:max(env(safe-area-inset-bottom,0px),12px);font:700 13px system-ui,-apple-system,sans-serif;'
+          + 'padding:9px 14px;border-radius:999px;background:rgba(255,210,63,.96);color:#17333a;'
+          + 'box-shadow:0 6px 16px rgba(0,0,0,.28);pointer-events:auto;cursor:pointer;display:none;user-select:none';
+        b.addEventListener('click', function(e){
+          e.stopPropagation();
+          try{ if(navigator.audioSession) navigator.audioSession.type = 'playback'; }catch(x){}
+          try{ if(W.__ps && W.__ps.ensureAudio) W.__ps.ensureAudio(); }catch(x){}
+          try{ if(W.__ps && W.__ps.actx && W.__ps.actx.state === 'suspended') W.__ps.actx.resume(); }catch(x){}
+          try{ if(W.__ps && W.__ps.sStar) W.__ps.sStar(); }catch(x){}   // audible confirmation chime
+        });
+        (D.body || D.documentElement).appendChild(b);
+      }
+      return b;
+    }
+    function upd(){
+      try{
+        var ps = W.__ps, b = el();
+        var st = ps && ps.actx ? ps.actx.state : 'none';
+        if(st === 'running'){ b.style.display = 'none'; }
+        else { b.textContent = '🔊 Tap for sound'; b.style.display = 'block'; }
+      }catch(e){}
+    }
+    setInterval(upd, 700); upd();
   })();
 
   // (3) HUD — enlarge the level pill / timer text and the round control buttons, in place.

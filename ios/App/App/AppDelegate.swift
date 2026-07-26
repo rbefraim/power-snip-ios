@@ -1,13 +1,29 @@
 import UIKit
 import Capacitor
+import AVFoundation
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?
 
+    // Make the game AUDIBLE even when the hardware ring/silent switch is ON.
+    // WKWebView (and its WebAudio output) plays through the app's shared AVAudioSession; the default
+    // category is silenced by the mute switch, which is why the game was silent on a real iPhone.
+    // Forcing the `.playback` category routes game audio like a music/media app: it plays through the
+    // speaker regardless of the ring switch. This is the actual native fix (the JS navigator.audioSession
+    // hint is not reliably honored inside Capacitor's WKWebView).
+    private func configureAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("[PowerSnip] AVAudioSession configuration failed: \(error)")
+        }
+    }
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        configureAudioSession()
         return true
     }
 
@@ -27,6 +43,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
+        // Re-assert the playback session — an interruption (call, other app) or backgrounding can
+        // deactivate it, which would leave the game silent after returning to the foreground.
+        configureAudioSession()
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
