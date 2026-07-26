@@ -381,16 +381,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (!AdMob) return;
     var cfg = window.POWERSNIP_ADMOB || {};
     var isIOS = !!(C.getPlatform && C.getPlatform() === 'ios');
-    // Real production AdMob unit ids are PER-PLATFORM. ANDROID is live (pub-8699327049231437).
-    // iOS needs its OWN AdMob app + units created in AdMob and supplied via window.POWERSNIP_ADMOB.ios*
-    // — until then iOS defaults to Google's TEST iOS units so ads are FUNCTIONAL in TestFlight (test
-    // ads only: no revenue, no invalid-activity risk). Swap in the real iOS units for production.
-    var IOS_TEST_REWARDED = 'ca-app-pub-3940256099942544/1712485313';
-    var IOS_TEST_INTER    = 'ca-app-pub-3940256099942544/4411468910';
-    var REWARDED = isIOS ? (cfg.iosRewardedId     || IOS_TEST_REWARDED) : (cfg.rewardedId     || 'ca-app-pub-8699327049231437/3290673006');
-    var INTER    = isIOS ? (cfg.iosInterstitialId || IOS_TEST_INTER)    : (cfg.interstitialId || 'ca-app-pub-8699327049231437/5660283108');
-    // iOS serves TEST ads until real units are configured; Android serves production.
-    var testMode = (cfg.testMode === true) || (isIOS && !cfg.iosRewardedId);
+    // PRODUCTION AdMob unit ids are PER-PLATFORM (account pub-8699327049231437). Both platforms serve
+    // REAL ads. Test ids would only ever be used if a build explicitly sets window.POWERSNIP_ADMOB.testMode
+    // — the release build never does, so production uses ONLY the real units below.
+    var IOS_REWARDED = 'ca-app-pub-8699327049231437/4755664462';   // iOS rewarded (the lives/level gate)
+    var IOS_INTER    = 'ca-app-pub-8699327049231437/6420245712';   // iOS interstitial (between levels)
+    var IOS_BANNER   = 'ca-app-pub-8699327049231437/2468292331';   // iOS banner (available; not displayed in-game)
+    var REWARDED = isIOS ? (cfg.iosRewardedId     || IOS_REWARDED) : (cfg.rewardedId     || 'ca-app-pub-8699327049231437/3290673006');
+    var INTER    = isIOS ? (cfg.iosInterstitialId || IOS_INTER)    : (cfg.interstitialId || 'ca-app-pub-8699327049231437/5660283108');
+    // Real ads in production. testMode is opt-in ONLY (never set in the release build).
+    var testMode = (cfg.testMode === true);
     if (!REWARDED || !INTER) return;
 
     // iOS 14.5+ App Tracking Transparency: request before AdMob may use the IDFA (Info.plist carries
