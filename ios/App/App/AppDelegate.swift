@@ -41,11 +41,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     // from `notifyWebLayer` below once (and only once) the authorization decision exists.
     private var didRequestTracking = false
 
+    // No #available guard is needed: ATTrackingManager is iOS 14.0+ and this target's
+    // IPHONEOS_DEPLOYMENT_TARGET is already 14.0.
     private func requestTrackingAuthorizationWhenActive() {
-        guard #available(iOS 14, *) else {
-            notifyWebLayer(status: "unavailable")   // pre-14.5: no ATT, let ads start
-            return
-        }
         if didRequestTracking { return }
         didRequestTracking = true
 
@@ -74,7 +72,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
-    @available(iOS 14, *)
     private func describe(_ status: ATTrackingManager.AuthorizationStatus) -> String {
         switch status {
         case .authorized:    return "authorized"
