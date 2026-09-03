@@ -1,6 +1,6 @@
 require_relative '../../node_modules/@capacitor/ios/scripts/pods_helpers'
 
-platform :ios, '14.0'
+platform :ios, '15.0'
 use_frameworks!
 
 # workaround to avoid Xcode caching of Pods that requires
@@ -23,4 +23,13 @@ end
 
 post_install do |installer|
   assertDeploymentTarget(installer)
+  # Apple ITMS-90068: from Spring 2027 an app whose MinimumOSVersion is below 15.0
+  # can no longer be uploaded to App Store Connect. The App target is set to 15.0 in
+  # App.xcodeproj; this raises every Pod target to match, so no dependency is left
+  # building against an older minimum than the app itself.
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+    end
+  end
 end

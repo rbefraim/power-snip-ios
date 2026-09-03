@@ -42,7 +42,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     private var didRequestTracking = false
 
     // No #available guard is needed: ATTrackingManager is iOS 14.0+ and this target's
-    // IPHONEOS_DEPLOYMENT_TARGET is already 14.0.
+    // IPHONEOS_DEPLOYMENT_TARGET is 15.0.
     private func requestTrackingAuthorizationWhenActive() {
         if didRequestTracking { return }
         didRequestTracking = true
