@@ -430,10 +430,10 @@ document.addEventListener('DOMContentLoaded', async function() {
           return Promise.resolve(AdMob.showConsentForm()).then(readConsent);
       }).catch(function () {});   // no network / no message published: the SDK still applies its own defaults
     }
-    // iOS 14.5+ App Tracking Transparency (App Review guideline 2.1): the prompt is requested
-    // NATIVELY in AppDelegate.applicationDidBecomeActive, because a request made from here while the
-    // app is still launching is silently dropped. AdMob must not read the IDFA before the user has
-    // answered, so iOS waits for __psATTDone(status) from the native side; the timer is a failsafe.
+    // 1.0.22 (build 24): NO tracking. The app no longer asks for App Tracking Transparency (kids play
+    // this game), every ad request is non-personalized (npa) and ad content is capped at General.
+    // AppDelegate now calls __psATTDone('not-requested') as soon as the app is active; the timer is
+    // only a failsafe.
     var attDone = !isIOS ? Promise.resolve() : new Promise(function (resolve) {
       var fired = false;
       window.__psATTDone = function (status) {
@@ -444,7 +444,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       setTimeout(function () { window.__psATTDone('timeout'); }, 12000);
     });
     function startSdk() {
-      return Promise.resolve(AdMob.initialize({ initializeForTesting: testMode })).catch(function () {});
+      return Promise.resolve(AdMob.initialize({ initializeForTesting: testMode, maxAdContentRating: 'General' })).catch(function () {});
     }
     var ready = attDone.then(gatherConsent).then(startSdk).then(function () { sdkUp = true; loadInter(); loadRewarded(); });
 
@@ -456,7 +456,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (s.ready && Date.now() - s.at < MAX_AGE_MS) return Promise.resolve(true);
         if (s.p) return s.p;
         s.ready = false;
-        s.p = Promise.resolve(AdMob[prepare]({ adId: adId, isTesting: testMode })).then(function () {
+        s.p = Promise.resolve(AdMob[prepare]({ adId: adId, isTesting: testMode, npa: true })).then(function () {
           s.ready = true; s.at = Date.now(); s.backoff = 30000; return true;
         }, function () {
           clearTimeout(s.timer);
