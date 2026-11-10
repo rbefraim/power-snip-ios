@@ -47,8 +47,6 @@
 	<true/>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-8699327049231437~6874441209</string>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>Power Snip uses your device data to show more relevant ads, which keeps the game free to play.</string>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict><key>SKAdNetworkIdentifier</key><string>cstr6suwn9.skadnetwork</string></dict>

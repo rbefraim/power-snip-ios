@@ -2,7 +2,6 @@ import UIKit
 import Capacitor
 import AVFoundation
 import WebKit
-import AppTrackingTransparency
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -41,45 +40,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     // from `notifyWebLayer` below once (and only once) the authorization decision exists.
     private var didRequestTracking = false
 
-    // No #available guard is needed: ATTrackingManager is iOS 14.0+ and this target's
-    // IPHONEOS_DEPLOYMENT_TARGET is 15.0.
+    // 1.0.22 (build 24): tracking is OFF. Kids play this game, so the app never asks for App Tracking
+    // Transparency and never reads the IDFA; all ads are non-personalized (npa) and capped at General
+    // content (see www/index.html). This only releases the web layer's ad gate once the app is active.
     private func requestTrackingAuthorizationWhenActive() {
         if didRequestTracking { return }
         didRequestTracking = true
-
-        // Already answered on a previous launch — don't re-prompt, just release the ad gate.
-        if ATTrackingManager.trackingAuthorizationStatus != .notDetermined {
-            notifyWebLayer(status: describe(ATTrackingManager.trackingAuthorizationStatus))
-            return
-        }
-
-        // A short delay lets the launch splash finish and makes certain the app is fully active.
-        // Requesting any earlier is precisely the mistake that made the prompt never appear.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self = self else { return }
-            guard UIApplication.shared.applicationState == .active else {
-                // Became inactive again before we could ask (e.g. a phone call during launch).
-                // Reset so the next activation retries instead of silently swallowing the prompt.
-                self.didRequestTracking = false
-                return
-            }
-            NSLog("[PowerSnip] ATT presenting request")
-            ATTrackingManager.requestTrackingAuthorization { status in
-                DispatchQueue.main.async {
-                    self.notifyWebLayer(status: self.describe(status))
-                }
-            }
-        }
-    }
-
-    private func describe(_ status: ATTrackingManager.AuthorizationStatus) -> String {
-        switch status {
-        case .authorized:    return "authorized"
-        case .denied:        return "denied"
-        case .restricted:    return "restricted"
-        case .notDetermined: return "notDetermined"
-        @unknown default:    return "unknown"
-        }
+        notifyWebLayer(status: "not-requested")
     }
 
     /// Hands the ATT outcome to the web layer, which uses it as the go-signal for AdMob.
